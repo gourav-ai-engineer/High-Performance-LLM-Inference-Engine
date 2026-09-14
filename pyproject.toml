@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "high-performance-llm-inference-engine"
+version = "0.1.0"
+description = "Research-grade LLM serving engine with paged KV cache and continuous batching"
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.2",
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "pydantic>=2.6",
+  "pydantic-settings>=2.2",
+  "prometheus-client>=0.20",
+  "aiohttp>=3.9",
+  "numpy>=1.26",
+  "transformers>=4.40",
+  "accelerate>=0.28",
+  "bitsandbytes>=0.43; platform_system == 'Linux'",
+  "triton>=2.2; platform_system == 'Linux'",
+  "nvidia-ml-py>=12.535; platform_system == 'Linux'",
+  "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.23", "locust>=2.24", "black>=24", "ruff>=0.4"]
+
+[tool.setuptools.packages.find]
+include = ["engine*", "kernels*", "api*", "benchmarks*", "telemetry*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
