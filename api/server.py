@@ -46,6 +46,7 @@ class InferenceService:
             config.max_batch_size, self.block_manager, config.preemption_mode
         )
         self._generation_lock = asyncio.Lock()
+        self._reported_preemptions = 0
 
     def _sample_kwargs(self, temperature: float, top_p: float) -> dict:
         if temperature <= 0:
@@ -79,16 +80,13 @@ class InferenceService:
                 )
                 if self.device.type == "cuda":
                     torch.cuda.synchronize()
-                ttft = time.perf_counter() - first_token_start
-                inference_ttft_seconds.observe(ttft)
+                elapsed = time.perf_counter() - first_token_start
+                inference_ttft_seconds.observe(elapsed)
 
                 generated_ids = output[0, inputs.shape[1] :].tolist()
-                for token in generated_ids:
-                    sequence.generated_tokens.append(int(token))
+                sequence.generated_tokens.extend(int(token) for token in generated_ids)
                 if generated_ids:
-                    inference_tpot_seconds.observe(
-                        max(0.0, (time.perf_counter() - first_token_start) / len(generated_ids))
-                    )
+                    inference_tpot_seconds.observe(elapsed / len(generated_ids))
                 sequence.finished = True
                 self.scheduler.finish(request_id)
                 inference_output_tokens.observe(len(generated_ids))
@@ -102,13 +100,15 @@ class InferenceService:
             inference_request_duration_seconds.observe(time.perf_counter() - started)
             queue_depth.set(len(self.scheduler.waiting))
             kv_cache_blocks_free.set(self.block_manager.get_num_free_blocks())
-            preemptions_total.inc(max(0, self.scheduler.preemptions - preemptions_total._value.get()))
+            new_preemptions = self.scheduler.preemptions - self._reported_preemptions
+            if new_preemptions > 0:
+                preemptions_total.inc(new_preemptions)
+            self._reported_preemptions = self.scheduler.preemptions
             self._update_gpu_metrics()
 
     async def generate_stream(self, prompt: str, max_tokens: int, temperature: float, top_p: float):
-        # The model.generate path is intentionally kept deterministic and dependency-light.
-        # Streaming is exposed at the API boundary while tokenization of the final text
-        # remains compatible with the non-streaming endpoint.
+        # Streaming is exposed at the API boundary; generation remains serialized so
+        # model.generate cannot race on shared model state in the reference runtime.
         text = await self.generate(prompt, max_tokens, temperature, top_p)
         for token in text.split():
             yield token + " "
@@ -122,10 +122,8 @@ class InferenceService:
 
             pynvml.nvmlInit()
             handle = pynvml.nvmlDeviceGetHandleByIndex(torch.cuda.current_device())
-            utilization = pynvml.nvmlDeviceGetUtilizationRates(handle)
-            gpu_utilization_percent.set(utilization.gpu)
+            gpu_utilization_percent.set(pynvml.nvmlDeviceGetUtilizationRates(handle).gpu)
         except Exception:
-            # NVML is optional at runtime; CUDA allocation metrics remain available.
             pass
 
 
